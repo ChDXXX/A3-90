@@ -1,4 +1,4 @@
-// index.js — final wiring for A1 + A2
+// index.js — final wiring for A1 + A2 (with debug & auth header logging)
 require('dotenv').config();
 
 const express = require('express');
@@ -9,26 +9,20 @@ const morgan = require('morgan');
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-/* -------------------- Security headers (strict CSP, no inline) -------------------- */
+/* -------------------- Security headers -------------------- */
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: {
     useDefaults: true,
     directives: {
-      // Only our own scripts, no inline/event handlers
-      "script-src": ["'self'"],
-      "script-src-attr": ["'none'"],
-      // Allow self + data + any https images (YouTube/TMDB/Pixabay thumbnails)
+      "script-src": ["'self'"],            // 允许同源外链脚本
+      "script-src-attr": ["'none'"],       // 禁止内联事件（前端已移除 onclick）
       "img-src": ["'self'", "data:", "https:"],
-      // If you directly play media from https origins, uncomment below
-      // "media-src": ["'self'", "https:"],
-      // Allow XHR/fetch to https APIs (S3 presigned, 3rd party, etc.)
-      "connect-src": ["'self'", "https:"],
-      // We keep style inline-safe for quick UI, remove if you enforce CSS files only
+      "connect-src": ["'self'", "https:"], // 允许同源 fetch
       "style-src": ["'self'", "https:", "'unsafe-inline'"]
     }
   },
-  hsts: { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true } // 180 days
+  hsts: { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true }
 }));
 
 /* -------------------- Logs, parsers, static -------------------- */
@@ -37,15 +31,20 @@ app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/public', express.static(path.join(__dirname, 'public'), { maxAge: '1h', etag: true }));
 
+// === Authorization header logger (put BEFORE routers) ===
+app.use((req, _res, next) => {
+  const h = req.headers.authorization || '(none)';
+  console.log('[AUTH]', req.method, req.url, h.startsWith('Bearer ') ? 'Bearer <redacted>' : h);
+  next();
+});
+
 /* -------------------- Health check -------------------- */
 app.get('/healthz', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 /* -------------------- Public routes (NO auth) -------------------- */
 // A1 local login routes
-let authRouter;
 try {
-  const mod = require('./routes/auth');           // supports default or { authRouter }
-  authRouter = mod.authRouter || mod;
+  const authRouter = require('./routes/auth'); // CommonJS
   app.use('/api/auth', authRouter);
   console.log('[wire] /api/auth mounted');
 } catch (e) {
@@ -79,32 +78,23 @@ try {
   console.warn('[wire] /api files routes not mounted:', e.message);
 }
 
-try {
-  const externalRouter = require('./routes/external');
-  app.use('/api/external', authRequired, externalRouter); // /api/external/*
-  console.log('[wire] /api/external (A1 protected) mounted');
-} catch (e) {
-  console.warn('[wire] /api/external not mounted:', e.message);
-}
-
 /* -------------------- A2 protected routes (Cognito) -------------------- */
-// Print the actual middleware file path to avoid wrong require
 const requireAuth = (function () {
   try {
     const resolved = require.resolve('./middleware/requireAuth');
     console.log('[wire] using requireAuth from', resolved);
     const mod = require(resolved);
-    // v3+ prints "[requireAuth vX.Y] loaded" on module load
     return mod.default || mod;
   } catch (e) {
     console.error('[wire] failed to load middleware/requireAuth.js:', e.message);
-    // SAFETY: block cloud APIs if auth is not configured
     return (_req, res) => res.status(503).json({ error: 'Cognito auth not configured' });
   }
 })();
 
-// Debug-only route: decode Bearer without verifying (helps diagnose 401)
+// Debug helper router (mounted WITHOUT auth)
 const debugRouter = express.Router();
+
+// 1) Decode JWT header/payload (no verify)
 debugRouter.get('/token', (req, res) => {
   const h = req.headers.authorization || '';
   const m = h.match(/^Bearer\s+(.+)$/i);
@@ -116,12 +106,23 @@ debugRouter.get('/token', (req, res) => {
     res.status(400).json({ error: 'Cannot decode token', detail: String(e) });
   }
 });
+
+// 2) Echo headers (is Authorization reaching backend?)
+debugRouter.get('/echo', (req, res) => {
+  res.json({ authorization: req.headers.authorization || '(none)', headers: req.headers });
+});
+
+// 3) Verify JWT via requireAuth and return req.user (proves JWKS/issuer/aud ok)
+debugRouter.get('/verify', requireAuth, (req, res) => {
+  res.json({ ok: true, user: req.user });
+});
+
 app.use('/api/cloud/_debug', debugRouter);
 
 // Real cloud routes under Cognito protection
 const cloudRouter = (function () {
   try {
-    const mod = require('./routes/cloud');  // your S3/Dynamo routes
+    const mod = require('./routes/cloud');  // S3/Dynamo routes
     return mod.default || mod;
   } catch (e) {
     const r = express.Router();
@@ -132,16 +133,15 @@ const cloudRouter = (function () {
 app.use('/api/cloud', requireAuth, cloudRouter);
 console.log('[wire] /api/cloud (A2 protected) mounted');
 
-/* -------------------- Front page (serve index.html) -------------------- */
+/* -------------------- Front page -------------------- */
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-/* -------------------- 404 & error handler -------------------- */
+/* -------------------- 404 & error -------------------- */
 app.use((req, res, _next) => {
   res.status(404).json({ error: 'not found', path: req.originalUrl });
 });
-
 app.use((err, _req, res, _next) => {
   console.error('[error]', err);
   const status = err.status || 500;

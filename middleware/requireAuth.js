@@ -107,7 +107,11 @@ module.exports = async function requireAuth(req, res, next) {
     req.user = verified;
     next();
   } catch (e) {
-    console.error(`[${VERSION}] error`, e?.message || e);
+    console.error(`[${VERSION}] error`, e?.message || e, {
+      expectedIssuer: EXPECTED_ISSUER,
+      envRegion: REGION,
+      envUserPoolId: USER_POOL_ID,
+    });
     return reply(res, 401, 'VERIFY_FAIL', 'Invalid/expired token', { detail: String(e?.message || e) });
   }
 };

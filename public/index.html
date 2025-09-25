@@ -23,6 +23,8 @@
     .ext-title { font-size: 12px; margin-top: 4px; line-height: 1.2; }
     .ext-source { font-size: 11px; color: #666; }
   </style>
+  <!-- 外链 + defer，满足 CSP（禁止内联事件） -->
+  <script src="/public/app.js" defer></script>
 </head>
 <body>
 <header><strong>CAB432 A02</strong> — Cloud-enabled Video API (Demo Client)</header>
@@ -30,6 +32,10 @@
   <!-- A2 -->
   <section>
     <h2>A2 — Cloud Features</h2>
+    <div class="row" style="gap:6px;">
+      <button id="btnDebugEcho" type="button">A2 Debug: Echo Header</button>
+      <button id="btnDebugVerify" type="button">A2 Debug: Verify JWT</button>
+    </div>
     <p class="warn">For grading demo: <strong>Cognito</strong> auth + <strong>S3</strong> presigned upload + <strong>DynamoDB</strong> metadata.</p>
 
     <h3>1) Cognito account</h3>
@@ -106,7 +112,5 @@
     <div id="files" class="grid"></div>
   </section>
 </main>
-
-<script src="/public/app.js" defer></script>
 </body>
 </html>
