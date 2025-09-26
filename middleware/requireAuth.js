@@ -1,4 +1,4 @@
-// middleware/requireAuth.js — v4.2 (ID/Access auto, hard diagnostics, set req.user)
+// middleware/requireAuth.js
 const { CognitoJwtVerifier } = require("aws-jwt-verify");
 
 const REGION       = process.env.AWS_REGION || "ap-southeast-2";
@@ -37,7 +37,6 @@ module.exports = async function requireAuth(req, res, next) {
   try {
     if (req.method === "OPTIONS") return next();
 
-    // 1) 必有：确认走到中间件 + 服务器收到了什么头
     console.log("[AUTH_CALL] path=", req.path);
     const hdr = req.headers.authorization || "";
     console.log("[AUTH_HEAD]", hdr.slice(0, 60) + (hdr.length > 60 ? "..." : ""));
@@ -62,7 +61,6 @@ module.exports = async function requireAuth(req, res, next) {
       console.error("[AUTH_PAYLOAD_ERR] cannot decode JWT payload (malformed?)");
     }
 
-    // 2) issuer 严格检查（可用 STRICT_ISSUER=false 暂时放宽）
     if (STRICT_ISSUER && EXPECTED_ISSUER && payload?.iss && payload.iss !== EXPECTED_ISSUER) {
       return res.status(401).json({
         error: "Issuer mismatch", code: "ISS_MISMATCH",
@@ -70,7 +68,6 @@ module.exports = async function requireAuth(req, res, next) {
       });
     }
 
-    // 3) 校验：先按 ID，再按 Access
     let verified, tokenType;
     try {
       verified = await idVerifier.verify(token, { clockTolerance: 30 });
@@ -91,7 +88,6 @@ module.exports = async function requireAuth(req, res, next) {
       }
     }
 
-    // 4) 通过：挂在 req.jwt / req.jwtType，并兼容你的 cloud.js：设置 req.user
     req.jwt = verified;
     req.jwtType = tokenType;
     req.user = { sub: verified.sub, username: verified["cognito:username"] || verified.username || "" };

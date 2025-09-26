@@ -1,4 +1,4 @@
-// routes/cognito.js — Cognito HTTP adapter (CommonJS, strict CSP friendly)
+// routes/cognito.js
 const express = require('express');
 const crypto = require('crypto');
 const router = express.Router();
@@ -8,18 +8,14 @@ const CLIENT_ID = process.env.COGNITO_CLIENT_ID;
 const CLIENT_SECRET = process.env.COGNITO_CLIENT_SECRET || null;
 
 if (!REGION || !CLIENT_ID) {
-  // 及早报错，方便定位
   console.warn('[Cognito] Missing AWS_REGION or COGNITO_CLIENT_ID in environment.');
 }
 
-// --------- optional: load your services/cognito.js if present ----------
 let svc = null;
 try {
-  // supports: module.exports = { signUp, confirm, login } OR default export
   const mod = require('../services/cognito');
   svc = mod?.default || mod;
 } catch (_) {
-  // no-op: fallback to SDK below
 }
 
 // --------- helpers ----------
@@ -31,7 +27,6 @@ function makeSecretHash(username) {
 }
 
 async function getSdk() {
-  // dynamic import to avoid forcing ESM across the app
   const m = await import('@aws-sdk/client-cognito-identity-provider');
   const { CognitoIdentityProviderClient, SignUpCommand, ConfirmSignUpCommand, InitiateAuthCommand } = m;
   const client = new CognitoIdentityProviderClient({ region: REGION });
@@ -39,7 +34,6 @@ async function getSdk() {
 }
 
 function normalizeTokens(out) {
-  // make frontend happy: always return { idToken, accessToken, refreshToken, expiresIn }
   const a = out || {};
   const ar = a.AuthenticationResult || a.authResult || {};
   const id  = a.idToken || a.IdToken || a.id_token || ar.IdToken || ar.idToken || ar.id_token;
@@ -55,8 +49,6 @@ function bad(res, err) {
   return res.status(400).json({ error: msg });
 }
 
-// ===================================================================
-// POST /api/cognito/signup   { username, password, email, displayName?, givenName?, familyName?, phoneNumber? }
 router.post('/signup', async (req, res) => {
   try {
     const { username, password, email, displayName, givenName, familyName, phoneNumber } = req.body || {};
@@ -64,17 +56,15 @@ router.post('/signup', async (req, res) => {
       return res.status(400).json({ error: 'username/password/email required' });
     }
 
-    // Prepare attributes; your pool may mark name/given_name/family_name/phone_number as required.
     const attrs = [
       { Name: 'email', Value: email },
       { Name: 'name', Value: displayName || username }
     ];
     if (givenName)   attrs.push({ Name: 'given_name', Value: givenName });
     if (familyName)  attrs.push({ Name: 'family_name', Value: familyName });
-    if (phoneNumber) attrs.push({ Name: 'phone_number', Value: phoneNumber }); // e.g. +61...
+    if (phoneNumber) attrs.push({ Name: 'phone_number', Value: phoneNumber });
 
     if (svc?.signUp) {
-      // Your service may accept extra attributes; pass them through if supported
       const maybe = await svc.signUp(username, password, email, displayName, { givenName, familyName, phoneNumber });
       return ok(res, maybe || { ok: true });
     }
@@ -94,8 +84,6 @@ router.post('/signup', async (req, res) => {
   } catch (e) { return bad(res, e); }
 });
 
-// ===================================================================
-// POST /api/cognito/confirm  { username, code }
 router.post('/confirm', async (req, res) => {
   try {
     const { username, code } = req.body || {};
@@ -118,8 +106,6 @@ router.post('/confirm', async (req, res) => {
   } catch (e) { return bad(res, e); }
 });
 
-// ===================================================================
-// POST /api/cognito/login    { username, password }
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};

@@ -7,7 +7,8 @@ const { v4: uuid } = require('uuid');
 const requireAuth = require('../middleware/requireAuth');
 const requireGroup = require('../middleware/requireGroup');
 
-const { getUploadUrl, getDownloadUrl } = require('../services/s3.js');
+const { getUploadUrlWithHeaders, getDownloadUrl } = require('../services/s3.js');
+
 const { saveItem, listItems, removeItem } = require('../services/dynamo.js');
 const { getPublicConfig } = require('../services/params.js');
 const { getWebhookSecret } = require('../services/secrets.js');
@@ -30,10 +31,8 @@ function normalizeVideoId(src = {}) {
   return src.videoid || src.videoId || src.key || null;
 }
 
-// （可选）调试路由，确认 mount 前缀： GET /api/cloud/_debug/ping 应返回 {ok:true}
 r.get('/_debug/ping', (_req, res) => res.json({ ok: true, at: '/api/cloud' }));
 
-// S3: 预签名上传URL（需要登录）
 r.post('/s3/upload-url', requireAuth, async (req, res) => {
   try {
     const filename = sanitize(req.body?.filename || req.body?.key || 'file.bin');
@@ -43,16 +42,15 @@ r.post('/s3/upload-url', requireAuth, async (req, res) => {
     const date = new Date().toISOString().slice(0, 10);
     const key = `uploads/${owner}/${date}/${uuid()}_${filename}`;
 
-    const url = await getUploadUrl(key, contentType, 300);
-    console.log('[s3] presign PUT ->', { key, contentType, owner });
-    res.json({ url, key, owner });
+    const { url, requiredHeaders } = await getUploadUrlWithHeaders(key, contentType, 300);
+    console.log('[s3] presign PUT ->', { key, contentType, owner, requiredHeaders });
+    res.json({ url, key, owner, headers: requiredHeaders });
   } catch (e) {
     console.error('[s3] presign error:', e);
     res.status(500).json({ error: 'Failed to get presigned URL' });
   }
 });
 
-// S3: 下载URL（可匿名/按需改）
 r.get('/s3/download-url/:key(*)?', async (req, res) => {
   try {
     const keyRaw = req.params.key ?? req.query.key;
@@ -79,7 +77,6 @@ r.get('/s3/download-url/:key(*)?', async (req, res) => {
   }
 });
 
-// DDB: 新建/保存
 r.post('/ddb/items', async (req, res) => {
   try {
     const qutUsername = getQutUsername(req);
@@ -101,8 +98,7 @@ r.post('/ddb/items', async (req, res) => {
       owner: qutUsername,
     };
 
-    // 注意：这里沿用你当前的签名 (qutUsername, videoid, meta)
-    const item = await saveItem(qutUsername, videoid, meta);
+    const item = await saveItem(meta);
     return res.json({ ok: true, item, saved: videoid });
   } catch (e) {
     console.error('[ddb/create] error:', e);
@@ -110,7 +106,6 @@ r.post('/ddb/items', async (req, res) => {
   }
 });
 
-// DDB: 列表
 r.get('/ddb/items', async (req, res) => {
   try {
     const qutUsername = getQutUsername(req);
@@ -134,7 +129,6 @@ r.get('/ddb/items', async (req, res) => {
   }
 });
 
-// DDB: 删除（Admin 组）
 r.delete('/ddb/items/:videoid', requireGroup('Admin'), async (req, res) => {
   try {
     const qutUsername = getQutUsername(req);
@@ -149,7 +143,6 @@ r.delete('/ddb/items/:videoid', requireGroup('Admin'), async (req, res) => {
   }
 });
 
-// 公共配置
 r.get('/config/public', async (_req, res) => {
   try {
     const cfg = await getPublicConfig();
@@ -159,7 +152,6 @@ r.get('/config/public', async (_req, res) => {
   }
 });
 
-// Webhook 测试
 r.post('/webhook/test', express.text({ type: '*/*' }), async (req, res) => {
   try {
     const secret = await getWebhookSecret();

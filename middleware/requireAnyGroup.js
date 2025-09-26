@@ -1,5 +1,4 @@
 // middleware/requireAnyGroup.js
-// Allow if user belongs to ANY of the provided groups
 module.exports = function requireAnyGroup(groupNames = []) {
   const set = new Set(groupNames);
   return (req, res, next) => {

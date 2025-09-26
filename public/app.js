@@ -1,4 +1,4 @@
-// public/app.js — final (CSP-safe, root /_debug, robust binding)
+// public/app.js — A2-safe S3 upload (Cognito), verbose errors
 
 console.log('[debug] app.js loaded');
 
@@ -93,16 +93,30 @@ async function debug_verify() {
 }
 
 // === A2: S3 ===
-async function s3_upload(fileInputId = 'file') {
-  const file = document.getElementById(fileInputId)?.files?.[0];
-  if (!file) return alert('请选择文件');
+async function s3_upload(fileInputId = 'file', evt) {
+  if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+
+  const input =
+    document.getElementById(fileInputId) ||
+    document.querySelector(`input[type="file"][name="${fileInputId}"]`);
+  const file = input?.files?.[0];
+
+  console.log('[choose]', {
+    hasInput: !!input,
+    filesLen: input?.files?.length || 0,
+    name: file?.name,
+    size: file?.size
+  });
+
+  if (!file) {
+    alert('need file to upload');
+    return;
+  }
 
   const resp = await fetch(`${API}/cloud/s3/upload-url`, {
     method: 'POST',
-    headers: (()=>{
-      const h = {};
-      if (authToken) h['Authorization'] = `Bearer ${authToken}`;
-      h['Content-Type'] = 'application/json';
+    headers: (() => {
+      const h = { 'Content-Type': 'application/json', ...authHeadersA2() };
       return h;
     })(),
     body: JSON.stringify({
@@ -111,23 +125,39 @@ async function s3_upload(fileInputId = 'file') {
     }),
     credentials: 'include'
   });
-  const data = await resp.json().catch(()=>({}));
-  if (!resp.ok) return alert(data.error || 'file to upload');
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data?.url) {
+    console.error('[presign failed]', resp.status, data);
+    alert(data?.error || `get presigned url failed (${resp.status})`);
+    return;
+  }
+
+  const putHeaders = new Headers(data.headers || {});
+  if (!putHeaders.has('Content-Type')) {
+    putHeaders.set('Content-Type', file.type || 'application/octet-stream');
+  }
+
+  console.log('[S3 PUT] ->', { url: data.url, headers: Object.fromEntries(putHeaders.entries()) });
 
   const putRes = await fetch(data.url, {
     method: 'PUT',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    headers: putHeaders,
     body: file
   });
 
+  const putText = await putRes.text().catch(()=> '');
   if (!putRes.ok) {
-    const text = await putRes.text();
-    console.error('[S3 PUT failed]', putRes.status, text);
-    return alert(`S3 上传失败: ${putRes.status}\n${text}`);
+    const m = putText.match(/<Code>([^<]+)<\/Code>/i);
+    const code = m ? m[1] : 'UnknownError';
+    console.error('[S3 PUT failed]', putRes.status, code, putText);
+    alert(`S3 upload fail: ${putRes.status}\nCode=${code}\n${putText.slice(0, 300)}`);
+    return;
   }
 
   console.log('[S3 PUT OK]', putRes.status, putRes.headers.get('ETag'));
-  alert(`上传成功！key = ${data.key}`);
+  input.value = '';
+  alert(`upload ok! key = ${data.key}`);
 
   const keyInput = document.getElementById('s3_key');
   if (keyInput) keyInput.value = data.key;
@@ -304,7 +334,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn_cg_signup')?.addEventListener('click', cg_signup);
   $('btn_cg_confirm')?.addEventListener('click', cg_confirm);
   $('btn_cg_login')?.addEventListener('click', cg_login);
-  $('btn_s3_upload')?.addEventListener('click', s3_upload);
+  $('btn_s3_upload')?.addEventListener('click', (e) => s3_upload('s3_file', e));
   $('btn_ddb_create')?.addEventListener('click', ddb_create);
   $('btn_ddb_list')?.addEventListener('click', ddb_list);
 

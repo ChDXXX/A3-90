@@ -1,33 +1,21 @@
 // services/params.js
-// Read public, non-sensitive config from SSM Parameter Store
-const { SSMClient, GetParametersCommand } = require("@aws-sdk/client-ssm");
+const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
+const REGION = process.env.AWS_REGION || "ap-southeast-2";
+const ssm = new SSMClient({ region: REGION });
 
-const ssm = new SSMClient({ region: process.env.AWS_REGION });
+let cache = { value: null, loadedAt: 0 };
 
-/**
- * getPublicConfig: fetch selected parameters by names defined in .env
- * ENV:
- *  - SSM_PUBLIC_API_BASE=/cab432/<you>/PUBLIC_API_BASE
- *  - SSM_UPLOAD_MAX_MB=/cab432/<you>/UPLOAD_MAX_SIZE_MB
- */
-async function getPublicConfig() {
-  const names = [
-    process.env.SSM_PUBLIC_API_BASE,
-    process.env.SSM_UPLOAD_MAX_MB,
-  ].filter(Boolean);
-
-  if (!names.length) return { apiBase: "", uploadMaxMB: 0 };
-
-  const out = await ssm.send(new GetParametersCommand({
-    Names: names,
-    WithDecryption: false, // public info — no decryption needed
+async function getPublicApiBase() {
+  const now = Date.now();
+  if (cache.value && now - cache.loadedAt < 60_000) return cache.value; // 60s cache
+  const out = await ssm.send(new GetParameterCommand({
+    Name: "A2-80/PUBLIC_API_BASE", WithDecryption: false
   }));
-
-  const map = Object.fromEntries((out.Parameters || []).map(p => [p.Name, p.Value]));
-  return {
-    apiBase: map[process.env.SSM_PUBLIC_API_BASE] || "",
-    uploadMaxMB: Number(map[process.env.SSM_UPLOAD_MAX_MB] || 0),
-  };
+  const val = out.Parameter?.Value || "";
+  cache = { value: val, loadedAt: now };
+  return val;
 }
 
-module.exports = { getPublicConfig };
+module.exports = {
+  getPublicApiBase
+};
