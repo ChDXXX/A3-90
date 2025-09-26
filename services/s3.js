@@ -1,18 +1,42 @@
-// services/s3.js — CommonJS
-const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+// services/s3.js
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { fromNodeProviderChain } = require('@aws-sdk/credential-provider-node');
 
-const s3 = new S3Client({ region: process.env.AWS_REGION });
+const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-southeast-2';
 const BUCKET = process.env.S3_BUCKET;
 
-async function getUploadUrl(key, contentType, expiresSec = 900) {
-  const cmd = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
-  return getSignedUrl(s3, cmd, { expiresIn: expiresSec });
+if (!BUCKET) {
+  console.warn('[S3] WARN: env S3_BUCKET is not set. Presign will fail without it.');
 }
 
-async function getDownloadUrl(key, expiresSec = 900) {
+const s3 = new S3Client({
+  region: REGION,
+});
+
+/**
+ * @param {string} key
+ * @param {string} contentType 
+ * @param {number} expiresIn 
+ * @returns {Promise<string>}
+ */
+exports.getUploadUrl = async (key, contentType, expiresIn = 300) => {
+  const cmd = new PutObjectCommand({
+    Bucket: BUCKET,
+    Key: key,
+    ContentType: contentType || 'application/octet-stream',
+  });
+  const url = await getSignedUrl(s3, cmd, { expiresIn });
+  return url;
+};
+
+
+exports.getDownloadUrl = async (key, expiresIn = 300) => {
   const cmd = new GetObjectCommand({ Bucket: BUCKET, Key: key });
-  return getSignedUrl(s3, cmd, { expiresIn: expiresSec });
-}
+  return await getSignedUrl(s3, cmd, { expiresIn });
+};
 
-module.exports = { getUploadUrl, getDownloadUrl };
+exports.deleteObject = async (key) => {
+  const cmd = new DeleteObjectCommand({ Bucket: BUCKET, Key: key });
+  await s3.send(cmd);
+};

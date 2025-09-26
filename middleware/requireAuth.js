@@ -1,117 +1,104 @@
-// middleware/requireAuth.js — v3.2 (verbose + JWKS auto-refresh + issuer strict)
-const jwt = require('jsonwebtoken');
-const jwkToPem = require('jwk-to-pem');
+// middleware/requireAuth.js — v4.2 (ID/Access auto, hard diagnostics, set req.user)
+const { CognitoJwtVerifier } = require("aws-jwt-verify");
 
-// fetch polyfill for Node < 18
-const _fetch = (typeof fetch === 'function')
-  ? fetch
-  : (...args) => import('node-fetch').then(m => m.default(...args));
-
-// ----- version banner (便于确认加载的是这份文件) -----
-const VERSION = 'requireAuth v3.2';
-console.log(`[${VERSION}] loaded`);
-
-const REGION = process.env.AWS_REGION;
+const REGION       = process.env.AWS_REGION || "ap-southeast-2";
 const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
+const CLIENT_ID    = process.env.COGNITO_CLIENT_ID || "";
+const STRICT_ISSUER= (process.env.STRICT_ISSUER || "true").toLowerCase() !== "false";
+const DEBUG_AUTH   = (process.env.DEBUG_AUTH || "0") === "1";
+
 const EXPECTED_ISSUER = (REGION && USER_POOL_ID)
   ? `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}`
   : null;
 
-// issuer -> { data:{keys:[]}, ts:number }
-const jwksCache = new Map();
-const JWKS_TTL_MS = 60 * 60 * 1000; // 1h
+console.log("[AUTH_BOOT]", {
+  REGION, POOL: USER_POOL_ID, CLIENT: CLIENT_ID, DEBUG_AUTH
+});
 
-async function fetchJwks(issuer) {
-  const url = `${issuer}/.well-known/jwks.json`;
-  const res = await _fetch(url);
-  if (!res.ok) throw new Error(`JWKS HTTP ${res.status} from ${url}`);
-  return res.json();
-}
-async function getCachedJwks(issuer) {
-  const now = Date.now();
-  const hit = jwksCache.get(issuer);
-  if (hit && (now - hit.ts) < JWKS_TTL_MS) return hit.data;
-  const data = await fetchJwks(issuer);
-  jwksCache.set(issuer, { data, ts: now });
-  return data;
-}
+const idVerifier = CognitoJwtVerifier.create({
+  userPoolId: USER_POOL_ID,
+  tokenUse:   "id",
+  clientId:   CLIENT_ID || undefined,
+});
+const accessVerifier = CognitoJwtVerifier.create({
+  userPoolId: USER_POOL_ID,
+  tokenUse:   "access",
+});
 
-function reply(res, http, code, message, extra = {}) {
-  return res.status(http).json({ error: message, code, ...extra, _v: VERSION });
-}
-
-function verifyWithJwk(token, jwk) {
-  const pem = jwkToPem(jwk);
-  return jwt.verify(token, pem, { algorithms: ['RS256'], clockTolerance: 30 });
+function decodePayload(token) {
+  try {
+    const [, p] = token.split(".");
+    const json = Buffer.from(p, "base64url").toString("utf8");
+    return JSON.parse(json);
+  } catch { return null; }
 }
 
 module.exports = async function requireAuth(req, res, next) {
   try {
-    const h = req.headers.authorization || '';
-    const m = h.match(/^Bearer\s+(.+)$/i);
-    if (!m) return reply(res, 401, 'NO_TOKEN', 'Missing token');
+    if (req.method === "OPTIONS") return next();
 
-    const token = m[1];
-    const decoded = jwt.decode(token, { complete: true });
-    if (!decoded?.header?.kid || !decoded?.payload) {
-      return reply(res, 401, 'BAD_TOKEN', 'Invalid token: cannot decode header/payload');
-    }
-    const { header, payload } = decoded;
+    // 1) 必有：确认走到中间件 + 服务器收到了什么头
+    console.log("[AUTH_CALL] path=", req.path);
+    const hdr = req.headers.authorization || "";
+    console.log("[AUTH_HEAD]", hdr.slice(0, 60) + (hdr.length > 60 ? "..." : ""));
 
-    // 可观测日志（每次都会打印）
-    console.log(`[${VERSION}] check`,
-      'path=', req.path,
-      'kid=', header.kid,
-      'iss=', payload.iss,
-      'aud=', payload.aud,
-      'exp=', payload.exp,
-      'use=', payload.token_use
-    );
-
-    // issuer 必须存在且形状正确
-    const tokenIssuer = payload.iss;
-    if (!tokenIssuer) return reply(res, 401, 'NO_ISS', 'Token has no issuer (iss)');
-    const okIssuer = /^https:\/\/cognito-idp\.[-.a-z0-9]+\.amazonaws\.com\/[A-Za-z0-9_-]+$/.test(tokenIssuer);
-    if (!okIssuer) return reply(res, 401, 'BAD_ISS', 'Token issuer is not a valid Cognito issuer', { got: tokenIssuer });
-
-    // 与 .env 严格匹配（防跨池）
-    if (EXPECTED_ISSUER && tokenIssuer !== EXPECTED_ISSUER) {
-      return reply(res, 401, 'ISS_MISMATCH', 'Issuer mismatch', { expected: EXPECTED_ISSUER, got: tokenIssuer });
+    const [scheme, token] = hdr.split(" ");
+    if (scheme !== "Bearer" || !token) {
+      return res.status(401).json({ error: "Missing Bearer token", code: "NO_BEARER" });
     }
 
-    // 找 kid 对应公钥；miss 时强制刷新一次 JWKS
-    let { keys } = await getCachedJwks(tokenIssuer);
-    let jwk = keys.find(k => k.kid === header.kid);
-    if (!jwk) {
-      console.warn(`[${VERSION}] kid miss in cache, refreshing JWKS… kid=`, header.kid);
-      const fresh = await fetchJwks(tokenIssuer);
-      jwksCache.set(tokenIssuer, { data: fresh, ts: Date.now() });
-      jwk = fresh.keys.find(k => k.kid === header.kid);
-      if (!jwk) return reply(res, 401, 'UNKNOWN_KID', 'No matching JWK kid for token', { kid: header.kid });
+    const payload = decodePayload(token);
+    if (DEBUG_AUTH && payload) {
+      console.log("[AUTH_PAYLOAD]",
+        "use=", payload.token_use,
+        "iss=", payload.iss,
+        "aud=", payload.aud,
+        "client_id=", payload.client_id,
+        "exp=", payload.exp,
+        "now=", Math.floor(Date.now()/1000)
+      );
+    }
+    if (DEBUG_AUTH && !payload) {
+      console.error("[AUTH_PAYLOAD_ERR] cannot decode JWT payload (malformed?)");
     }
 
-    const verified = verifyWithJwk(token, jwk);
-
-    // 限定 token_use
-    if (verified.token_use !== 'id' && verified.token_use !== 'access') {
-      return reply(res, 401, 'BAD_USE', 'Unsupported token_use', { token_use: verified.token_use });
-    }
-
-    // 可选：aud 校验
-    if (process.env.COGNITO_CLIENT_ID && verified.aud && verified.aud !== process.env.COGNITO_CLIENT_ID) {
-      return reply(res, 401, 'AUD_MISMATCH', 'Audience mismatch', {
-        expected: process.env.COGNITO_CLIENT_ID, got: verified.aud
+    // 2) issuer 严格检查（可用 STRICT_ISSUER=false 暂时放宽）
+    if (STRICT_ISSUER && EXPECTED_ISSUER && payload?.iss && payload.iss !== EXPECTED_ISSUER) {
+      return res.status(401).json({
+        error: "Issuer mismatch", code: "ISS_MISMATCH",
+        expected: EXPECTED_ISSUER, got: payload.iss
       });
     }
 
-    req.user = verified;
-    next();
+    // 3) 校验：先按 ID，再按 Access
+    let verified, tokenType;
+    try {
+      verified = await idVerifier.verify(token, { clockTolerance: 30 });
+      tokenType = "id";
+      if (CLIENT_ID && verified.aud && verified.aud !== CLIENT_ID) {
+        return res.status(401).json({
+          error: "Audience mismatch", code: "AUD_MISMATCH",
+          expected: CLIENT_ID, got: verified.aud
+        });
+      }
+    } catch (e1) {
+      try {
+        verified = await accessVerifier.verify(token, { clockTolerance: 30 });
+        tokenType = "access";
+      } catch (e2) {
+        console.error("[AUTH_VERIFY_FAIL]", e1?.message || e1, "|", e2?.message || e2);
+        return res.status(401).json({ error: "Invalid/expired token", code: "VERIFY_FAIL" });
+      }
+    }
+
+    // 4) 通过：挂在 req.jwt / req.jwtType，并兼容你的 cloud.js：设置 req.user
+    req.jwt = verified;
+    req.jwtType = tokenType;
+    req.user = { sub: verified.sub, username: verified["cognito:username"] || verified.username || "" };
+
+    return next();
   } catch (e) {
-    console.error(`[${VERSION}] error`, e?.message || e, {
-      expectedIssuer: EXPECTED_ISSUER,
-      envRegion: REGION,
-      envUserPoolId: USER_POOL_ID,
-    });
-    return reply(res, 401, 'VERIFY_FAIL', 'Invalid/expired token', { detail: String(e?.message || e) });
+    console.error("[AUTH_UNHANDLED]", e?.message || e);
+    return res.status(401).json({ error: "Invalid/expired token", code: "UNHANDLED" });
   }
 };

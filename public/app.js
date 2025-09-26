@@ -93,20 +93,44 @@ async function debug_verify() {
 }
 
 // === A2: S3 ===
-async function s3_upload() {
-  if (!window.tokenA2) return alert('Please login with Cognito (A2) first.');
-  const key = $('s3_key')?.value;
-  const file = $('s3_file')?.files?.[0];
-  if (!file) return alert('Please choose a file.');
-  const headers = { ...authHeadersA2(), 'Content-Type': 'application/json' };
-  console.log('[s3_upload] using Authorization =', headers.Authorization ? (headers.Authorization.slice(0,30) + '...') : '(none)');
-  let resp = await fetch(API + '/cloud/s3/upload-url', {
-    method: 'POST', headers, body: JSON.stringify({ key, contentType: file.type || 'application/octet-stream' })
+async function s3_upload(fileInputId = 'file') {
+  const file = document.getElementById(fileInputId)?.files?.[0];
+  if (!file) return alert('请选择文件');
+
+  const resp = await fetch(`${API}/cloud/s3/upload-url`, {
+    method: 'POST',
+    headers: (()=>{
+      const h = {};
+      if (authToken) h['Authorization'] = `Bearer ${authToken}`;
+      h['Content-Type'] = 'application/json';
+      return h;
+    })(),
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream'
+    }),
+    credentials: 'include'
   });
-  let data = await resp.json().catch(()=>({}));
-  if (!resp.ok) return alert(data.error || 'Failed to get presigned URL');
-  const putResp = await fetch(data.url, { method: 'PUT', body: file }); // <- no Bearer
-  const status = $('s3_status'); if (status) status.textContent = putResp.ok ? 'Uploaded to S3 ✅' : 'Upload failed ❌';
+  const data = await resp.json().catch(()=>({}));
+  if (!resp.ok) return alert(data.error || 'file to upload');
+
+  const putRes = await fetch(data.url, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file
+  });
+
+  if (!putRes.ok) {
+    const text = await putRes.text();
+    console.error('[S3 PUT failed]', putRes.status, text);
+    return alert(`S3 上传失败: ${putRes.status}\n${text}`);
+  }
+
+  console.log('[S3 PUT OK]', putRes.status, putRes.headers.get('ETag'));
+  alert(`上传成功！key = ${data.key}`);
+
+  const keyInput = document.getElementById('s3_key');
+  if (keyInput) keyInput.value = data.key;
 }
 
 // === A2: DDB ===
@@ -264,7 +288,6 @@ async function showThumbs(id) {
   out.innerHTML = ''; out.appendChild(grid);
 }
 
-// === 绑定（无内联，CSP OK） ===
 function bindDebugButtons() {
   const btnEcho = $('btnDebugEcho');
   const btnVerify = $('btnDebugVerify');
