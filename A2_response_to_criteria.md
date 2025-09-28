@@ -2,95 +2,191 @@ Assignment 1 - REST API Project - Response to Criteria
 
 - **Name:** Zhaocheng Dong
 - **Student number:** n10051457
+- **Name:** Guanliang Dong
+- **Student number:** n12005371
 
----
+Assignment 2 - Cloud Services Exercises - Response to Criteria
+================================================
 
-## Core Criteria (20 marks)
+Instructions
+------------------------------------------------
+- Keep this file named A2_response_to_criteria.md, do not change the name
+- Upload this file along with your code in the root directory of your project
+- Upload this file in the current Markdown format (.md extension)
+- Do not delete or rearrange sections.  If you did not attempt a criterion, leave it blank
+- Text inside [ ] like [eg. S3 ] are examples and should be removed
 
-### CPU intensive process (video transcoding)
-- Implemented with **ffmpeg** (via fluent-ffmpeg).
-- Converts uploaded video into MP4 (720p) with specified resolution.
-- Verified by API endpoint `/api/transcode/sync` and `/api/transcode` (async).
-- **Demo**: Upload a video, trigger transcoding.  
-  - [T: CPU intensive task demo @ 02:55]
 
-### CPU load testing
-- Stress test using multiple concurrent calls to `/api/transcode/sync`.
-- Sustains **>80% CPU for ~5 minutes** on EC2 (shown via AWS console Monitoring graph).
-- **Demo**: Run bash loop script in EC2 to trigger multiple sync transcodes.  
-  - [T: CPU load test demo @ 03:06]
+Overview
+------------------------------------------------
 
-### Two kinds of data
-- **Unstructured**: raw video files, transcoded files, and generated thumbnails (stored in `storage/`).
-- **Structured**: metadata JSON (file id, owner, transcoding status, job queues) stored via lowdb under `data/db.json`.
-- **Demo**: Show file stored under `/app/storage`, then show metadata JSON file.  
-  - [T: Two kinds of data demo @ 05:01]
+- **Name:** Zhaocheng Dong
+- **Student number:** n10051457
+- **Partner name (if applicable):** Guanliang Dong n12005371
+- **Application name:** assessment2
+- **Two line description:** This for the assessmemt2, if any ambiguous for the video please double check the AWS consoles.
+- **EC2 instance name or ID:** i-06e10dfc6898b7e77
 
-### Containerisation
-- Application containerised with a **Dockerfile**.
-- Can be built locally and tagged for ECR.
-- **Demo**: Show Dockerfile in repo, then docker build and run.  
-  - [T: Dockerfile shown @ 00:35]
+------------------------------------------------
 
-### Deploy the container
-- Docker image pushed to **AWS ECR (repo: n10051457)**.  
-- Pulled and run on **EC2 instance** with environment variables.  
-- **Demo**: Show ECR repository in AWS console, then docker pull/run on EC2.  
-  - [T: ECR + EC2 demo @ 00:48]
+### Core - First data persistence service
 
-### REST API
-- Endpoints implemented in Express:
-  - `POST /api/auth/login` – JWT login (hard-coded users alice/bob).
-  - `POST /api/upload` – upload video.
-  - `GET /api/files` – list user files (pagination, sorting, filtering).
-  - `POST /api/transcode` – async transcode.
-  - `POST /api/transcode/sync` – sync transcode.
-  - `GET /api/jobs/:id` – query job status.
-  - `POST /api/thumbnails` – generate thumbnails.
-  - `GET /api/files/:id/thumbnails` – list thumbnails.
-- **Demo**: Summarise endpoints in video, then show one or two with curl/browser.  
-  - [T: REST API demo @ 03:21]
+- **AWS service name:**  S3
+- **What data is being stored?:** Video files
+- **Why is this service suited to this data?:** Object storage scales for large files and supports direct browser uploads.
+- **Why is are the other services used not suitable for this data?:** Forexample DynamoDB is not intended for large binary blobs and would be inefficient/costly for file payloads.
+- **Bucket/instance/table name:**
+- **Video timestamp:** 2:20 - 3:30, 2:48 - 3:30
+- **Relevant files:**
+A2-80-main\services\s3.js
+A2-80-main\routes\cloud.js
+A2-80-main\public\app.js
+A2-80-main\public\index.html
 
-### User login
-- Simple hard-coded users: `alice/alice123`, `bob/bob123`.
-- JWT returned and used for authentication on other API calls.
-- **Demo**: Log in and show token.  
-  - [T: Login demo @ 01:58]
+### Core - Second data persistence service
 
----
+- **AWS service name:**  DynamoDB
+- **What data is being stored?:** Video metadata
+- **Why is this service suited to this data?:**Fast key-value and query by partition/sort keys with on-demand scaling.
+- **Why is are the other services used not suitable for this data?:**S3 lacks query capabilities for structured attributes and would require extra indexing.
+- **Bucket/instance/table name:** A2-80
+- **Video timestamp:** 3:30 - 3:50
+- **Relevant files:**
+A2-80-main\services\dynamo.js
+A2-80-main\routes\cloud.js
+A2-80-main\DATA\db.json
+DELETE /api/cloud/ddb/items/:id
 
-## Additional Criteria (10 marks)
+### Third data service
 
-### Extended API features
-- File listing supports **pagination**, **filter by owner**, and **sort by uploadedAt/size**.
-- **Demo**: Call `/api/files?page=1&sort=uploadedAt&order=desc`.  
-  - [T: Extended API demo @ 04:06]
+- **AWS service name:**  
+- **What data is being stored?:** 
+- **Why is this service suited to this data?:** 
+- **Why is are the other services used not suitable for this data?:** 
+- **Bucket/instance/table name:**
+- **Video timestamp:**
+- **Relevant files:**
+    -
 
-### External APIs
-- Integrated with 3 external APIs:
-  - **YouTube API** – search related videos.
-  - **TMDB API** – movie database search.
-  - **Pixabay API** – free image search.
-- **Demo**: Show related results displayed in `/public` frontend.  
-  - [T: External API demo @ 03:43]
+### S3 Pre-signed URLs
 
-### Additional data types
-- Generates **thumbnails** from uploaded video (image files).
-- Stored under `storage/thumbnails/<videoId>/`.
-- **Demo**: Call `/api/thumbnails` then list files in directory.  
-  - [T: Thumbnail demo @ 04:42]
+- **S3 Bucket names:**a2-group80
+- **Video timestamp:**2:48 - 3:50
+- **Relevant files:**
+A2-80-main\services\s3.js
+A2-80-main\routes\cloud.js
+A2-80-main\public\app.js
+/api/cloud/s3/upload-url
+/api/cloud/s3/download-url
 
-### Custom processing
-- Beyond transcoding: generates multiple thumbnails every N seconds.
-- **Demo**: Show sample thumbnails in browser `/thumbnails/...jpg`.  
-  - [T: Custom processing demo @ 04:52]
 
-### Web client
-- `public/index.html` + `external.js` frontend allows:
-  - Login
-  - Upload video
-  - Trigger transcode
-  - Show thumbnails
-  - Show external API results
-- **Demo**: Use web client to log in and perform operations.  
-  - [T: Web client demo @ 00:00]
+### In-memory cache
+
+- **ElastiCache instance name:**
+- **What data is being cached?:** Paginated DynamoDB list responses for frequent reads.
+- **Why is this data likely to be accessed frequently?:** Listing pages are repeatedly queried by users and benefit from short-TTL caching.
+- **Video timestamp:** 4:50 - 5:39 
+- **Relevant files:**
+A2-80-main\services\cache.js
+A2-80-main\routes\cloud.js (uses cacheFetch around list calls)
+
+### Core - Statelessness
+0:23-0:42, 6:56-7:12
+- **What data is stored within your application that is not stored in cloud data services?:** Only ephemeral process memory (tokens, request state); no on-disk app data.
+- **Why is this data not considered persistent state?:** It is transient and can be recreated by re-authentication or re-fetching from S3/DynamoDB after restarts.
+- **How does your application ensure data consistency if the app suddenly stops?:** All durable state lives in S3/DynamoDB; upon restart the API reads from those sources, so no local recovery is required.
+- **Relevant files:** 
+A2-80-main\index.js
+A2-80-main\services
+A2-80-main\Dockerfile
+SSE /api/sse/events + automatic reconnect
+
+
+### Graceful handling of persistent connections
+    5:39 - 6:07
+- **Type of persistent connection and use:** Server-Sent Events (SSE) for heartbeats/notifications.
+- **Method for handling lost connections:** Client reconnects to the SSE endpoint; server sends periodic heartbeats.
+- **Relevant files:**
+A2-80-main\routes\sse.js
+A2-80-main\public\app.js
+
+
+### Core - Authentication with Cognito
+
+- **User pool name:** A2-80 and ID: ap-southeast-2_ziGCN2BCN
+- **How are authentication tokens handled by the client?:** The client stores the ID token in memory and sends it as Token. 
+- **Video timestamp:** 1:10 - 2:30
+- **Relevant files:**
+A2-80-main\middleware\requireAuth.js
+A2-80-main\routes\cognito.js
+A2-80-main\public\app.js
+POST /api/cognito/login
+
+
+
+### Cognito multi-factor authentication
+
+- **What factors are used for authentication:**
+- **Video timestamp:**
+- **Relevant files:**
+    -
+
+### Cognito federated identities
+
+- **Identity providers used:**
+- **Video timestamp:**
+- **Relevant files:**
+    -
+
+### Cognito groups
+
+- **How are groups used to set permissions?:** Admin-only actions,such as delete user will 403, check via middleware.
+- **Video timestamp:** 2:30 -2:48
+- **Relevant files:**
+A2-80-main\middleware\requireGroup.js
+A2-80-main\routes\cloud.js
+
+### Core - DNS with Route53
+
+- **Subdomain**:  a2-80.cab432.com
+- **Video timestamp:** 0:45 - 1:09
+
+### Parameter store
+
+- **Parameter names:** /A2-80/PUBLIC_API_BASE,  /A2-80/MEMCACHED_ENDPOINT 
+- **Video timestamp:** 3:50 - 4:23
+- **Relevant files:**
+A2-80-main\services\params.js
+A2-80-main\services\cache.js
+
+### Secrets manager
+
+- **Secrets names:** /A2-80/WEBHOOK_SECRET
+- **Video timestamp:** 4:23 - 4:50
+- **Relevant files:**
+A2-80-main\services\secrets.js
+A2-80-main\routes\cloud.js
+ /api/cloud/webhook/test
+
+
+### Infrastructure as code
+
+- **Technology used:** AWS CloudFormation
+- **Services deployed:** S3 bucket, DynamoDB table, SSM parameters, and Secrets for the webhook.
+- **Video timestamp:** 6:05 - 7:00
+- **Relevant files:**
+    -\iac\template.yaml
+
+### Other (with prior approval only)
+
+- **Description:**
+- **Video timestamp:**
+- **Relevant files:**
+    -
+
+### Other (with prior permission only)
+
+- **Description:**
+- **Video timestamp:**
+- **Relevant files:**
+    -
