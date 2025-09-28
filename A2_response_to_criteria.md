@@ -1,10 +1,3 @@
-Assignment 1 - REST API Project - Response to Criteria
-
-- **Name:** Zhaocheng Dong
-- **Student number:** n10051457
-- **Name:** Guanliang Dong
-- **Student number:** n12005371
-
 Assignment 2 - Cloud Services Exercises - Response to Criteria
 ================================================
 
@@ -22,7 +15,7 @@ Overview
 
 - **Name:** Zhaocheng Dong
 - **Student number:** n10051457
-- **Partner name (if applicable):** Guanliang Dong n12005371
+- **Partner name :** Guanliang Dong n12005371
 - **Application name:** assessment2
 - **Two line description:** This for the assessmemt2, if any ambiguous for the video please double check the AWS consoles.
 - **EC2 instance name or ID:** i-06e10dfc6898b7e77
