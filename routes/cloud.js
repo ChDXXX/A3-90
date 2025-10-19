@@ -8,10 +8,14 @@ const requireAuth = require('../middleware/requireAuth');
 const requireGroup = require('../middleware/requireGroup');
 
 const { getUploadUrlWithHeaders, getDownloadUrl } = require('../services/s3.js');
-
 const { saveItem, listItems, removeItem } = require('../services/dynamo.js');
 const { getPublicConfig } = require('../services/params.js');
 const { getWebhookSecret } = require('../services/secrets.js');
+
+let enqueuePostUploadTask = null;
+try {
+  enqueuePostUploadTask = require('../services/queue.js').enqueuePostUploadTask;
+} catch (_) {}
 
 const r = express.Router();
 
@@ -140,6 +144,51 @@ r.delete('/ddb/items/:videoid', requireGroup('Admin'), async (req, res) => {
   } catch (e) {
     console.error('[ddb/delete] error:', e);
     return res.status(500).json({ error: 'Failed to delete item', detail: String(e?.message || e) });
+  }
+});
+
+r.post('/sqs/enqueue', requireAuth, async (req, res) => {
+  try {
+    if (!enqueuePostUploadTask) {
+      return res.status(501).json({ error: 'SQS enqueue not available: add services/queue.js (export enqueuePostUploadTask)' });
+    }
+
+    const qutUsername = getQutUsername(req);
+    if (!qutUsername) return res.status(401).json({ error: 'unauthorized', code: 'NO_QUT_USERNAME' });
+
+    const { key, videoid, task, options } = req.body || {};
+    if (!key) return res.status(400).json({ error: 'Missing key' });
+
+    const vid = (normalizeVideoId({ videoid }) || uuid()).toString();
+    const jobTask = (task || 'inspect').toLowerCase();
+    const pendingStatus = `PENDING_${jobTask.toUpperCase()}`;
+
+    await enqueuePostUploadTask({
+      type: jobTask,
+      key,
+      videoid: vid,
+      'qut-username': qutUsername,
+      options: options || {}
+    });
+
+    try {
+      await saveItem({
+        'qut-username': qutUsername,
+        owner: qutUsername,
+        videoid: vid,
+        videoId: vid,
+        inputKey: key,
+        status: pendingStatus,
+        createdAt: Date.now()
+      });
+    } catch (e) {
+      console.warn('[ddb/pending] skipped:', e?.message || e);
+    }
+
+    return res.json({ ok: true, enqueued: { videoid: vid, key, task: jobTask } });
+  } catch (e) {
+    console.error('[sqs/enqueue] error:', e);
+    return res.status(500).json({ error: 'Failed to enqueue', detail: String(e?.message || e) });
   }
 });
 
