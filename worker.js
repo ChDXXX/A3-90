@@ -11,15 +11,16 @@ const {
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-const { receiveOne, deleteByReceipt } = require('./services/queue.js');
 const { saveItem } = require('./services/dynamo.js');
+const { receiveOne, deleteByReceipt } = require('./services/queue.js');
 
 const REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-southeast-2';
 const BUCKET = process.env.S3_BUCKET;
 const DDB_TABLE = process.env.DDB_TABLE;
 
 if (!BUCKET) console.warn('[Worker] WARN: S3_BUCKET not set.');
-if (!DDB_TABLE) console.warn('[Worker] WARN: DDB_TABLE not set.');
+if (!process.env.SQS_QUEUE_URL) console.warn('[Worker] WARN: SQS_QUEUE_URL not set.');
+if (!DDB_TABLE) console.warn('[Worker] INFO: DDB_TABLE not set, will skip saving to DynamoDB.');
 
 const s3 = new S3Client({ region: REGION });
 
@@ -47,7 +48,7 @@ async function uploadToS3(localPath, outKey, contentType) {
 async function headObject(key) {
   try {
     return await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
-  } catch (e) {
+  } catch {
     return null;
   }
 }
@@ -95,41 +96,54 @@ async function ffmpegPreview(localPath, outPath, sec = 10, width = 720) {
   return outPath;
 }
 
+function extractUsernameFromKey(inputKey) {
+  const m = inputKey.match(/^uploads\/([^/]+)\//i);
+  return m ? m[1] : null;
+}
+
 async function handleInspect(job, local, inputKey) {
-  // 先用 ffprobe，失败则退化到 HeadObject
   const meta = await ffprobeJson(local);
   let basic = await headObject(inputKey);
   basic = basic ? { size: basic.ContentLength, contentType: basic.ContentType, etag: basic.ETag } : null;
 
-  await saveItem({
-    'qut-username': job['qut-username'],
-    'videoid': job.videoid,
-    inputKey,
-    status: 'DONE',
-    meta, basic,
-    updatedAt: new Date().toISOString()
-  });
+  if (DDB_TABLE && saveItem) {
+    await saveItem({
+      'qut-username': job['qut-username'] || extractUsernameFromKey(inputKey) || 'unknown',
+      'videoid': job.videoid || path.basename(inputKey),
+      inputKey,
+      status: 'DONE',
+      meta, basic,
+      updatedAt: new Date().toISOString()
+    });
+  }
 
-  console.log('[worker/inspect] done:', { videoid: job.videoid });
+  console.log('[worker/inspect] done:', { videoid: job.videoid, inputKey });
 }
 
 async function handleThumb(job, local, inputKey) {
   const at = Number(job?.options?.thumbAt ?? 1);
-  const base = path.basename(inputKey).replace(/\.[^.]+$/, '');
-  const outLocal = path.join('/tmp', `${base}_thumb.jpg`);
-  const outKey = inputKey.replace(/^uploads\//, 'thumbnails/').replace(/\.[^.]+$/, '') + '_thumb.jpg';
+
+  const username = job['qut-username'] || extractUsernameFromKey(inputKey) || 'unknown';
+  const baseNoExt = path.basename(inputKey).replace(/\.[^.]+$/, '');
+  const outLocal = path.join('/tmp', `${baseNoExt}_thumb.jpg`);
+  const outKey = inputKey
+    .replace(/^uploads\//i, `thumbnails/${username}/`)
+    .replace(/^thumbnails\/[^/]+\//i, `thumbnails/${username}/`)
+    .replace(/[^/]+$/i, `${baseNoExt}_thumb.jpg`);
 
   await ffmpegThumb(local, outLocal, at);
   await uploadToS3(outLocal, outKey, 'image/jpeg');
 
-  await saveItem({
-    'qut-username': job['qut-username'],
-    'videoid': job.videoid,
-    inputKey,
-    thumbKey: outKey,
-    status: 'DONE',
-    updatedAt: new Date().toISOString()
-  });
+  if (DDB_TABLE && saveItem) {
+    await saveItem({
+      'qut-username': username,
+      'videoid': job.videoid || baseNoExt,
+      inputKey,
+      thumbKey: outKey,
+      status: 'DONE',
+      updatedAt: new Date().toISOString()
+    });
+  }
 
   console.log('[worker/thumb] done:', { videoid: job.videoid, outKey });
 }
@@ -137,29 +151,35 @@ async function handleThumb(job, local, inputKey) {
 async function handlePreview(job, local, inputKey) {
   const sec = Number(job?.options?.previewSec ?? 10);
   const width = Number(job?.options?.width ?? 720);
-  const base = path.basename(inputKey).replace(/\.[^.]+$/, '');
-  const outLocal = path.join('/tmp', `${base}_preview.mp4`);
-  const outKey = inputKey.replace(/^uploads\//, 'previews/').replace(/\.[^.]+$/, '') + '_preview.mp4';
+
+  const username = job['qut-username'] || extractUsernameFromKey(inputKey) || 'unknown';
+  const baseNoExt = path.basename(inputKey).replace(/\.[^.]+$/, '');
+  const outLocal = path.join('/tmp', `${baseNoExt}_preview.mp4`);
+  const outKey = inputKey
+    .replace(/^uploads\//i, `previews/${username}/`)
+    .replace(/^previews\/[^/]+\//i, `previews/${username}/`)
+    .replace(/[^/]+$/i, `${baseNoExt}_preview.mp4`);
 
   await ffmpegPreview(local, outLocal, sec, width);
   await uploadToS3(outLocal, outKey, 'video/mp4');
 
-  await saveItem({
-    'qut-username': job['qut-username'],
-    'videoid': job.videoid,
-    inputKey,
-    previewKey: outKey,
-    status: 'DONE',
-    updatedAt: new Date().toISOString()
-  });
+  if (DDB_TABLE && saveItem) {
+    await saveItem({
+      'qut-username': username,
+      'videoid': job.videoid || baseNoExt,
+      inputKey,
+      previewKey: outKey,
+      status: 'DONE',
+      updatedAt: new Date().toISOString()
+    });
+  }
 
   console.log('[worker/preview] done:', { videoid: job.videoid, outKey });
 }
 
 async function handleOne(job) {
-  // 约定 job = { type, key, videoid, 'qut-username', options? }
   const type = (job?.type || 'inspect').toLowerCase();
-  const inputKey = job.key;
+  const inputKey = job?.key;
   if (!inputKey) throw new Error('job.key missing');
 
   const local = await downloadToTmp(inputKey);
@@ -185,11 +205,10 @@ async function loop() {
         await handleOne(msg.body);
         await deleteByReceipt(msg.receipt);
       } catch (e) {
-        console.error('[worker] job failed:', e);
-        // 不删消息，交给 SQS 重试/最终进入 DLQ
+        console.error('[worker] job failed:', e?.stack || e);
       }
     } catch (e) {
-      console.error('[worker] loop error:', e);
+      console.error('[worker] loop error:', e?.stack || e);
     }
   }
 }
